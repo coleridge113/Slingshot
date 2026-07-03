@@ -1,4 +1,5 @@
 #include "raylib.h"
+#include <cmath>
 
 struct Window 
 {
@@ -17,16 +18,17 @@ struct Block
     void draw() const 
     { 
         DrawRectanglePro(
-                getRect(), 
-                { w / 2, h / 2},
-                rotation,
-                WHITE
-                ); 
+            getRect(), 
+            { w / 2, h / 2},
+            rotation,
+            WHITE
+        ); 
     }
 };
 
 void update(Block& block);
 void handleInput(Block& block);
+void followMouse(Block& block);
 
 int main() 
 {
@@ -35,7 +37,7 @@ int main()
     InitWindow(win.width, win.height, win.title);
     SetTargetFPS(win.fps);
 
-    Block block { win.width / 2.0f, win.height / 2.0f, 30, 30 };
+    Block block { win.width / 7.0f, win.height / 1.35f, 30, 30 };
 
     while (!WindowShouldClose())
     {
@@ -54,6 +56,7 @@ int main()
 void update(Block& block)
 {
     handleInput(block);
+    followMouse(block);
 }
 
 void handleInput(Block& block)
@@ -66,4 +69,15 @@ void handleInput(Block& block)
     {
         block.rotation += 1;
     }
+}
+
+
+void followMouse(Block& block)
+{
+    Vector2 mousePos = GetMousePosition();
+    
+    float dx = mousePos.x - block.x;
+    float dy = mousePos.y - block.y;
+    float angle = std::atan2(dy, dx);
+    block.rotation = angle * RAD2DEG; 
 }
