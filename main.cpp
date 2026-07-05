@@ -1,11 +1,13 @@
 #include "raylib.h"
 #include <cmath>
+#include <vector>
 
 struct Window 
 {
     static constexpr int width = 900;
     static constexpr int height = 540;
     static constexpr int fps = 60;
+    static constexpr float floor = 450;
     const char *title = "Slingshot";
 };
 
@@ -13,6 +15,8 @@ struct Block
 {
     float x, y, w, h;
     float rotation = 0;
+    bool dynamic = true;
+    float velocity = 0.f;
 
     Rectangle getRect() const { return Rectangle { x, y, w, h}; }
     void draw() const 
@@ -26,9 +30,11 @@ struct Block
     }
 };
 
-void update(Block& block);
+void update(Window& win, Block& block);
 void handleInput(Block& block);
 void followMouse(Block& block);
+void pickup(Block& block);
+void applyGravity(Block& block);
 
 int main() 
 {
@@ -37,14 +43,17 @@ int main()
     InitWindow(win.width, win.height, win.title);
     SetTargetFPS(win.fps);
 
-    Block block { win.width / 7.0f, win.height / 1.35f, 30, 30 };
+    std::vector<Block> blocks;
+    Block block { win.width / 2.0f, win.height / 1.35f, 30, 30 };
+
+    
 
     while (!WindowShouldClose())
     {
         BeginDrawing();
         ClearBackground(BLACK);
-
-        update(block);
+        
+        update(win, block);
         block.draw();
 
         EndDrawing();
@@ -53,10 +62,16 @@ int main()
     return 0;
 }
 
-void update(Block& block)
+void update(Window& win, Block& block)
 {
     handleInput(block);
-    followMouse(block);
+    // followMouse(block);
+    pickup(block);
+
+    if (block.y <= win.floor && block.dynamic)
+    {
+        applyGravity(block);
+    }
 }
 
 void handleInput(Block& block)
@@ -80,4 +95,23 @@ void followMouse(Block& block)
     float dy = mousePos.y - block.y;
     float angle = std::atan2(dy, dx);
     block.rotation = angle * RAD2DEG; 
+}
+
+void pickup(Block& block)
+{
+    block.dynamic = true;
+    if (IsMouseButtonDown(MOUSE_BUTTON_LEFT))
+    {
+        block.dynamic = false;
+        block.velocity = 0;
+        block.x = GetMouseX();
+        block.y = GetMouseY();
+    }
+}
+
+constexpr float gravity = 0.5f;
+void applyGravity(Block& block)
+{
+    block.velocity += gravity;
+    block.y += block.velocity;
 }
