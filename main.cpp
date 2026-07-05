@@ -16,7 +16,7 @@ struct Block
 {
     float x, y, w, h;
     float rotation = 0;
-    bool dynamic = true;
+    bool flying = false;
     float velocity = 0.f;
     struct 
     {
@@ -51,7 +51,7 @@ int main()
     SetTargetFPS(win.fps);
 
     std::vector<Block> blocks;
-    Block block { 200, win.height / 1.35f, 30, 30 };
+    Block block { 200, 375, 30, 30 };
     Block anch { 200, 375, 5, 5 };
 
     Font font = GetFontDefault();
@@ -81,7 +81,7 @@ void update(Window& win, Block& block, Block& anch)
     handleInput(block);
     pickup(block);
 
-    if (block.y <= win.floor && block.dynamic)
+    if (block.y <= win.floor && block.flying)
     {
         applyGravity(block);
     }
@@ -90,9 +90,9 @@ void update(Window& win, Block& block, Block& anch)
     Vector2 blockPos  = { block.x, block.y };
 
     double dst = Vector2Distance(anchorPos, blockPos);
-    float maxRadius = anch.anchor.radius; // Accessing the radius from the anchor block
+    float maxRadius = anch.anchor.radius;
 
-    if (!block.dynamic && dst > maxRadius)
+    if (!block.flying && dst > maxRadius)
     {
         Vector2 direction = Vector2Subtract(blockPos, anchorPos);
         Vector2 normalizedDir = Vector2Normalize(direction);
@@ -100,6 +100,10 @@ void update(Window& win, Block& block, Block& anch)
         block.x = anchorPos.x + restrictedOffset.x;
         block.y = anchorPos.y + restrictedOffset.y;
         block.velocity = 0.f;
+    }
+    else if (!block.flying && dst != 0)
+    {
+
     }
 }
 
@@ -128,13 +132,16 @@ void followMouse(Block& block)
 
 void pickup(Block& block)
 {
-    block.dynamic = true;
     if (IsMouseButtonDown(MOUSE_BUTTON_LEFT))
     {
-        block.dynamic = false;
+        block.flying = false;
         block.velocity = 0;
         block.x = GetMouseX();
         block.y = GetMouseY();
+    }
+    if (IsMouseButtonReleased(MOUSE_BUTTON_LEFT))
+    {
+        block.flying = true;
     }
 }
 
