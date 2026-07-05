@@ -1,4 +1,5 @@
 #include "raylib.h"
+#include "raymath.h"
 #include <cmath>
 #include <vector>
 
@@ -17,6 +18,11 @@ struct Block
     float rotation = 0;
     bool dynamic = true;
     float velocity = 0.f;
+    struct 
+    {
+        Vector2 origin = { 200, 375 };
+        double radius = 100;
+    } anchor;
 
     Rectangle getRect() const { return Rectangle { x, y, w, h}; }
     void draw() const 
@@ -30,11 +36,12 @@ struct Block
     }
 };
 
-void update(Window& win, Block& block);
+void update(Window& win, Block& block, Block& anch);
 void handleInput(Block& block);
 void followMouse(Block& block);
 void pickup(Block& block);
 void applyGravity(Block& block);
+double getDistance(Block& a, Block& b);
 
 int main() 
 {
@@ -44,17 +51,24 @@ int main()
     SetTargetFPS(win.fps);
 
     std::vector<Block> blocks;
-    Block block { win.width / 2.0f, win.height / 1.35f, 30, 30 };
+    Block block { 200, win.height / 1.35f, 30, 30 };
+    Block anch { 200, 375, 5, 5 };
 
-    
+    Font font = GetFontDefault();
 
     while (!WindowShouldClose())
     {
         BeginDrawing();
         ClearBackground(BLACK);
+
+        {
+            double dst = getDistance(anch, block);
+            DrawTextEx(font, TextFormat("D: %.f", dst), {5,5}, 32, 2, WHITE);
+        }
         
-        update(win, block);
+        update(win, block, anch);
         block.draw();
+        anch.draw();
 
         EndDrawing();
     }
@@ -62,15 +76,30 @@ int main()
     return 0;
 }
 
-void update(Window& win, Block& block)
+void update(Window& win, Block& block, Block& anch)
 {
     handleInput(block);
-    // followMouse(block);
     pickup(block);
 
     if (block.y <= win.floor && block.dynamic)
     {
         applyGravity(block);
+    }
+
+    Vector2 anchorPos = { anch.x, anch.y };
+    Vector2 blockPos  = { block.x, block.y };
+
+    double dst = Vector2Distance(anchorPos, blockPos);
+    float maxRadius = anch.anchor.radius; // Accessing the radius from the anchor block
+
+    if (!block.dynamic && dst > maxRadius)
+    {
+        Vector2 direction = Vector2Subtract(blockPos, anchorPos);
+        Vector2 normalizedDir = Vector2Normalize(direction);
+        Vector2 restrictedOffset = Vector2Scale(normalizedDir, maxRadius);
+        block.x = anchorPos.x + restrictedOffset.x;
+        block.y = anchorPos.y + restrictedOffset.y;
+        block.velocity = 0.f;
     }
 }
 
@@ -114,4 +143,13 @@ void applyGravity(Block& block)
 {
     block.velocity += gravity;
     block.y += block.velocity;
+}
+
+double getDistance(Block& a, Block& b)
+{
+    return 
+        std::sqrt(
+            std::pow(a.x - b.x, 2) +
+            std::pow(a.y - b.y, 2)
+        );
 }
