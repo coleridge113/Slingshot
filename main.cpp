@@ -1,199 +1,212 @@
 #include "raylib.h"
 #include "raymath.h"
 #include <cmath>
-#include <vector>
 
-struct Window 
-{
-    static constexpr int width = 900;
-    static constexpr int height = 540;
-    static constexpr int fps = 60;
-    static constexpr float floor = 450;
-    const char *title = "Slingshot";
+// =========================================================
+// Configuration Data
+// =========================================================
+namespace Config {
+    constexpr int WindowWidth = 900;
+    constexpr int WindowHeight = 540;
+    constexpr int TargetFPS = 60;
+    
+    constexpr float FloorY = 500.0f;
+    constexpr float Gravity = 0.5f;
+    
+    // Slingshot tuning
+    constexpr float LaunchPowerMultiplier = 0.20f;
+    constexpr float DeadzoneDistance = 10.0f;
+    constexpr float MaxTetherRadius = 100.0f;
+}
+
+// =========================================================
+// Window Manager (RAII Pattern)
+// =========================================================
+/**
+ * @brief Ensures the Raylib window is safely initialized and closed.
+ */
+class ScopedWindow {
+public:
+    ScopedWindow(int width, int height, const char* title) {
+        InitWindow(width, height, title);
+        SetTargetFPS(Config::TargetFPS);
+    }
+    
+    ~ScopedWindow() {
+        CloseWindow();
+    }
+
+    // Delete copy/move constructors to prevent accidental double-closures
+    ScopedWindow(const ScopedWindow&) = delete;
+    ScopedWindow& operator=(const ScopedWindow&) = delete;
 };
 
-struct Block 
-{
-    float x, y, w, h;
-    float rotation = 0;
-    bool flying = false;
-    float xVel = 0.f;
-    float yVel = 0.f;
+// =========================================================
+// Entities
+// =========================================================
 
-    struct 
-    {
-        Vector2 origin = { 200, 375 };
-        double radius = 100;
-    } anchor;
+/**
+ * @brief Represents the physical object being thrown.
+ * Kept as a simple struct (Plain Old Data) since it only holds state.
+ */
+struct Projectile {
+    Vector2 position { 0.0f, 0.0f };
+    Vector2 velocity { 0.0f, 0.0f };
+    Vector2 size { 30.0f, 30.0f };
+    float rotation = 0.0f;
+    bool isFlying = false;
 
-    Rectangle getRect() const { return Rectangle { x, y, w, h}; }
-    
-    void draw() const 
-    { 
-        DrawRectanglePro(
-            getRect(), 
-            { w / 2, h / 2 },
-            rotation,
-            WHITE
-        ); 
+    /// @brief Renders the projectile to the screen.
+    void Draw() const {
+        Rectangle rect { position.x, position.y, size.x, size.y };
+        Vector2 origin { size.x / 2.0f, size.y / 2.0f };
+        
+        DrawRectanglePro(rect, origin, rotation, WHITE);
     }
 };
 
-constexpr float gravity = 0.5f;
+/**
+ * @brief Controller class that manages the slingshot logic, aiming, and physics.
+ */
+class Slingshot {
+private:
+    Vector2 m_anchorPos;
+    Projectile m_projectile;
 
-// Forward Declarations
-void update(Window& win, Block& block, Block& anch);
-void handleInput(Block& block);
-void followMouse(Block& block); // Left in case you need it later for rotation
-double getDistance(Block& a, Block& b);
+public:
+    explicit Slingshot(Vector2 anchorPos) : m_anchorPos(anchorPos) {
+        ResetProjectile();
+    }
 
+    /// @brief Main update loop for the slingshot.
+    void Update() {
+        HandleManualRotation();
 
-int main() 
-{
-    Window win;
+        if (!m_projectile.isFlying) {
+            HandleAiming();
+        } else {
+            UpdatePhysics();
+        }
+    }
 
-    InitWindow(win.width, win.height, win.title);
-    SetTargetFPS(win.fps);
+    /// @brief Renders the anchor, the tether (if aiming), and the projectile.
+    void Draw() const {
+        // Draw the anchor point
+        DrawCircleV(m_anchorPos, 5.0f, RED);
+        
+        // Draw a visual tether line while dragging
+        if (!m_projectile.isFlying && IsMouseButtonDown(MOUSE_BUTTON_LEFT)) {
+            DrawLineEx(m_anchorPos, m_projectile.position, 2.0f, DARKGRAY);
+        }
 
-    std::vector<Block> blocks;
-    Block block { 200, 375, 30, 30 };
-    Block anch { 200, 375, 5, 5 };
+        m_projectile.Draw();
+    }
 
-    Font font = GetFontDefault();
+    /// @brief Calculates current drag distance for UI.
+    float GetDistanceToAnchor() const {
+        return Vector2Distance(m_anchorPos, m_projectile.position);
+    }
 
-    while (!WindowShouldClose())
-    {
+private:
+    /**
+     * @brief Handles mouse dragging and constraining the projectile to the max radius.
+     */
+    void HandleAiming() {
+        if (IsMouseButtonDown(MOUSE_BUTTON_LEFT)) {
+            Vector2 mousePos = GetMousePosition();
+            float dist = Vector2Distance(m_anchorPos, mousePos);
+
+            // Constrain to maximum radius
+            if (dist > Config::MaxTetherRadius) {
+                Vector2 direction = Vector2Normalize(Vector2Subtract(mousePos, m_anchorPos));
+                m_projectile.position = Vector2Add(m_anchorPos, Vector2Scale(direction, Config::MaxTetherRadius));
+            } else {
+                m_projectile.position = mousePos;
+            }
+        }
+
+        // Handle the release/launch
+        if (IsMouseButtonReleased(MOUSE_BUTTON_LEFT)) {
+            float dist = Vector2Distance(m_anchorPos, m_projectile.position);
+            
+            // Deadzone check: prevent launching if barely pulled
+            if (dist > Config::DeadzoneDistance) {
+                m_projectile.isFlying = true;
+                
+                // Direction is from projectile TO anchor (shoot opposite of pull)
+                Vector2 direction = Vector2Normalize(Vector2Subtract(m_anchorPos, m_projectile.position));
+                
+                // Velocity scales with how far it was pulled
+                m_projectile.velocity = Vector2Scale(direction, dist * Config::LaunchPowerMultiplier);
+            } else {
+                ResetProjectile();
+            }
+        }
+    }
+
+    /**
+     * @brief Applies gravity and velocity to the projectile, checking for floor collisions.
+     */
+    void UpdatePhysics() {
+        // Apply gravity to velocity, then velocity to position (Euler integration)
+        m_projectile.velocity.y += Config::Gravity;
+        m_projectile.position = Vector2Add(m_projectile.position, m_projectile.velocity);
+
+        // Floor collision check
+        if (m_projectile.position.y >= Config::FloorY) {
+            m_projectile.position.y = Config::FloorY;
+            m_projectile.isFlying = false;
+            m_projectile.velocity = { 0.0f, 0.0f }; // Kill momentum
+        }
+    }
+
+    /**
+     * @brief Allows the user to spin the projectile manually.
+     */
+    void HandleManualRotation() {
+        if (IsKeyDown(KEY_J)) { m_projectile.rotation -= 2.0f; }
+        if (IsKeyDown(KEY_L)) { m_projectile.rotation += 2.0f; }
+    }
+
+    /**
+     * @brief Snaps the projectile back to the resting position at the anchor.
+     */
+    void ResetProjectile() {
+        m_projectile.position = m_anchorPos;
+        m_projectile.velocity = { 0.0f, 0.0f };
+        m_projectile.isFlying = false;
+    }
+};
+
+// =========================================================
+// Main Entry Point
+// =========================================================
+int main() {
+    // Initializes window and ensures it closes automatically on exit
+    ScopedWindow window(Config::WindowWidth, Config::WindowHeight, "Slingshot");
+
+    Slingshot slingshot({ 200.0f, 375.0f });
+    Font defaultFont = GetFontDefault();
+
+    while (!WindowShouldClose()) {
+        // --- UPDATE ---
+        slingshot.Update();
+
+        // --- DRAW ---
         BeginDrawing();
         ClearBackground(BLACK);
 
-        {
-            double dst = getDistance(anch, block);
-            // TextFormat is the standard Raylib way to print formatted variables
-            DrawTextEx(font, TextFormat("D: %.1f", dst), {5, 5}, 32, 2, WHITE);
-        }
-        
-        update(win, block, anch);
-        
-        block.draw();
-        anch.draw();
+        // Draw Floor Line
+        DrawLine(0, Config::FloorY + 15, Config::WindowWidth, Config::FloorY + 15, DARKGRAY);
+
+        // UI
+        float distance = slingshot.GetDistanceToAnchor();
+        DrawTextEx(defaultFont, TextFormat("Distance: %.1f", distance), { 10.0f, 10.0f }, 24.0f, 2.0f, LIGHTGRAY);
+
+        slingshot.Draw();
 
         EndDrawing();
     }
 
-    CloseWindow();
-    return 0;
-}
-
-void update(Window& win, Block& block, Block& anch)
-{
-    handleInput(block);
-    
-    Vector2 anchorPos = { anch.x, anch.y };
-    Vector2 blockPos  = { block.x, block.y };
-    float maxRadius = anch.anchor.radius;
-
-    // =========================================================
-    // STATE 1: DRAGGING / AIMING
-    // =========================================================
-    if (!block.flying)
-    {
-        // 1. Handle Mouse Dragging
-        if (IsMouseButtonDown(MOUSE_BUTTON_LEFT))
-        {
-            block.x = GetMouseX();
-            block.y = GetMouseY();
-            blockPos = { block.x, block.y }; // Update local vector
-        }
-
-        // 2. Apply Tether Constraint (Keep it inside the circle)
-        float dst = Vector2Distance(anchorPos, blockPos);
-        if (dst > maxRadius)
-        {
-            Vector2 direction = Vector2Subtract(blockPos, anchorPos);
-            Vector2 normalizedDir = Vector2Normalize(direction);
-            Vector2 restrictedOffset = Vector2Scale(normalizedDir, maxRadius);
-            
-            block.x = anchorPos.x + restrictedOffset.x;
-            block.y = anchorPos.y + restrictedOffset.y;
-            
-            // Re-sync local variables for the launch calculation below
-            blockPos = { block.x, block.y };
-            dst = maxRadius; 
-        }
-
-        // 3. Handle The Release (The Slingshot Launch)
-        if (IsMouseButtonReleased(MOUSE_BUTTON_LEFT))
-        {
-            if (dst > 10.0f) // Deadzone: Don't launch if barely pulled
-            {
-                block.flying = true;
-                
-                Vector2 direction = Vector2Subtract(blockPos, anchorPos);
-                Vector2 normalizedDir = Vector2Normalize(direction);
-                
-                float launchPower = 0.15f; 
-                
-                // Shoot backwards relative to the pull direction
-                block.xVel = -normalizedDir.x * dst * launchPower;
-                block.yVel = -normalizedDir.y * dst * launchPower;
-            }
-            else 
-            {
-                // If the user just clicked without pulling, snap it back to center
-                block.x = anchorPos.x;
-                block.y = anchorPos.y;
-            }
-        }
-    }
-    // =========================================================
-    // STATE 2: FLYING (PHYSICS ENGINE)
-    // =========================================================
-    else 
-    {
-        // 1. Apply Gravity to Vertical Velocity
-        block.yVel += gravity;
-        
-        // 2. Apply Velocity to Position
-        block.x += block.xVel;
-        block.y += block.yVel;
-
-        // 3. Floor Collision Check
-        if (block.y >= win.floor)
-        {
-            block.y = win.floor;       // Snap exactly to floor
-            block.flying = false;      // End the flight state
-            block.xVel = 0.f;          // Kill kinetic momentum
-            block.yVel = 0.f;
-        }
-    }
-}
-
-void handleInput(Block& block)
-{
-    if (IsKeyDown(KEY_J))
-    {
-        block.rotation -= 1;
-    }
-    if (IsKeyDown(KEY_L))
-    {
-        block.rotation += 1;
-    }
-}
-
-void followMouse(Block& block)
-{
-    Vector2 mousePos = GetMousePosition();
-    
-    float dx = mousePos.x - block.x;
-    float dy = mousePos.y - block.y;
-    float angle = std::atan2(dy, dx);
-    block.rotation = angle * RAD2DEG; 
-}
-
-double getDistance(Block& a, Block& b)
-{
-    // Using Raylib's highly optimized math instead of raw standard math
-    Vector2 vA = { a.x, a.y };
-    Vector2 vB = { b.x, b.y };
-    return Vector2Distance(vA, vB);
+    return 0; // ScopedWindow destructor automatically calls CloseWindow() here
 }
